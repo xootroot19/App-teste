@@ -14,17 +14,14 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # 1. Baixa o projeto do GitHub
       - name: Checkout
         uses: actions/checkout@v5
 
-      # 2. Configura Node
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 24
 
-      # 3. Cria package.json automaticamente
       - name: Create package.json
         shell: bash
         run: |
@@ -44,12 +41,11 @@ jobs:
               "@react-native-async-storage/async-storage": "2.2.0",
               "expo": "~57.0.0",
               "react": "19.2.3",
-              "react-native": "0.86.0"
+              "react-native": "0.86.3"
             }
           }
           EOF
 
-      # 4. Cria configuração Expo
       - name: Create app.json
         shell: bash
         run: |
@@ -73,8 +69,6 @@ jobs:
           }
           EOF
 
-      # 5. Cria configuração EAS
-      # Preview = APK instalável diretamente
       - name: Create eas.json
         shell: bash
         run: |
@@ -100,7 +94,6 @@ jobs:
           }
           EOF
 
-      # 6. Confere se o App.js realmente está no repositório
       - name: Check App.js
         shell: bash
         run: |
@@ -112,11 +105,12 @@ jobs:
           echo "App.js encontrado."
           wc -l App.js
 
-      # 7. Instala dependências
       - name: Install dependencies
         run: npm install
 
-      # 8. Configura Expo + EAS e autentica
+      - name: Fix Expo dependencies
+        run: npx expo install --fix
+
       - name: Setup Expo / EAS
         uses: expo/expo-github-action@v8
         with:
@@ -124,7 +118,6 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
           packager: npm
 
-      # 9. Mostra versões para facilitar debug
       - name: Versions
         shell: bash
         run: |
@@ -133,15 +126,12 @@ jobs:
           eas --version
           npx expo --version
 
-      # 10. Valida dependências Expo
       - name: Expo dependency check
         run: npx expo install --check
 
-      # 11. Verifica configuração
       - name: Show Expo config
         run: npx expo config --type public
 
-      # 12. Build do APK no EAS
       - name: Build APK
         run: |
           eas build \
