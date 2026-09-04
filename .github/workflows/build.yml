@@ -1,4 +1,4 @@
-name: Bunny Models - Build APK
+name: Bunny Models - Build APK Standalone
 
 on:
   workflow_dispatch:
@@ -11,39 +11,58 @@ jobs:
   build-android:
     name: Build APK Android
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
-      # Baixa os arquivos do repositório
+      # ============================================================
+      # BAIXA O REPOSITÓRIO
+      # ============================================================
+
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Java necessário para o Gradle / Android
+
+      # ============================================================
+      # JAVA / ANDROID
+      # ============================================================
+
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      # Node.js
+
+      # ============================================================
+      # NODE
+      # ============================================================
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "22"
 
-      # Garante que o App.js existe
+
+      # ============================================================
+      # VERIFICA APP.JS
+      # ============================================================
+
       - name: Check App.js
         shell: bash
         run: |
           if [ ! -f "App.js" ]; then
-            echo "ERRO: App.js não encontrado na raiz do repositório."
+            echo "ERRO: App.js não encontrado na raiz."
             exit 1
           fi
 
-          echo "App.js encontrado:"
+          echo "App.js encontrado."
           wc -l App.js
 
-      # Cria package.json durante a build
+
+      # ============================================================
+      # CRIA PACKAGE.JSON
+      # ============================================================
+
       - name: Create package.json
         shell: bash
         run: |
@@ -67,7 +86,11 @@ jobs:
           }
           EOF
 
-      # Configuração do aplicativo
+
+      # ============================================================
+      # CONFIGURA O APP
+      # ============================================================
+
       - name: Create app.json
         shell: bash
         run: |
@@ -77,8 +100,11 @@ jobs:
               "name": "Bunny Models",
               "slug": "bunny-models",
               "version": "1.0.0",
+
               "orientation": "portrait",
+
               "userInterfaceStyle": "light",
+
               "android": {
                 "package": "com.bunnymodels.app",
                 "versionCode": 1
@@ -87,20 +113,31 @@ jobs:
           }
           EOF
 
-      # Instala dependências
+
+      # ============================================================
+      # INSTALA DEPENDÊNCIAS
+      # ============================================================
+
       - name: Install dependencies
         run: npm install
 
-      # Ajusta automaticamente versões compatíveis com o Expo
+
+      # ============================================================
+      # CORRIGE VERSÕES DO EXPO
+      # ============================================================
+
       - name: Fix Expo dependencies
         run: npx expo install --fix
 
-      # Validação
+
       - name: Check Expo dependencies
         run: npx expo install --check
 
-      # Gera o projeto Android nativo
-      # NÃO usa EAS e NÃO precisa de EXPO_TOKEN
+
+      # ============================================================
+      # GERA PROJETO ANDROID NATIVO
+      # ============================================================
+
       - name: Generate Android project
         env:
           CI: "1"
@@ -109,43 +146,107 @@ jobs:
             --platform android \
             --clean
 
-      # Mostra se a estrutura Android foi realmente criada
+
+      # ============================================================
+      # VERIFICA O ANDROID
+      # ============================================================
+
       - name: Check Android project
         shell: bash
         run: |
           if [ ! -f "android/gradlew" ]; then
-            echo "ERRO: android/gradlew não foi gerado."
+            echo "ERRO: android/gradlew não encontrado."
             exit 1
           fi
 
-          echo "Projeto Android criado com sucesso."
-          ls -la android
+          echo "Projeto Android criado."
 
-      # Permissão para executar Gradle
+
+      # ============================================================
+      # PERMISSÃO DO GRADLE
+      # ============================================================
+
       - name: Make Gradle executable
         run: chmod +x android/gradlew
 
-      # Cache do Gradle
+
+      # ============================================================
+      # CACHE / CONFIG GRADLE
+      # ============================================================
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # Compila APK instalável
-      - name: Build APK
-        working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
 
-      # Confere o APK
+      # ============================================================
+      # BUILD RELEASE
+      #
+      # IMPORTANTE:
+      # assembleRelease empacota o JavaScript dentro do APK.
+      # Não depende do Metro.
+      # ============================================================
+
+      - name: Build Standalone Release APK
+        working-directory: android
+        env:
+          CI: "1"
+        run: |
+          ./gradlew clean
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+
+      # ============================================================
+      # PROCURA APK
+      # ============================================================
+
       - name: Find APK
         shell: bash
         run: |
-          echo "APKs encontrados:"
-          find android/app/build/outputs/apk -type f -name "*.apk" -print
+          echo "======================================"
+          echo "APKs GERADOS:"
+          echo "======================================"
 
-      # Salva o APK nos Artifacts do GitHub
+          find android/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          echo "======================================"
+
+
+      # ============================================================
+      # COPIA PARA NOME MAIS BONITO
+      # ============================================================
+
+      - name: Prepare APK
+        shell: bash
+        run: |
+          mkdir -p output
+
+          APK=$(find android/app/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERRO: APK release não encontrado."
+            exit 1
+          fi
+
+          cp "$APK" output/BunnyModels.apk
+
+          echo "APK preparado:"
+          ls -lh output/BunnyModels.apk
+
+
+      # ============================================================
+      # ENVIA PARA O GITHUB ACTIONS
+      # ============================================================
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: bunny-models-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: BunnyModels-Android
+          path: output/BunnyModels.apk
           if-no-files-found: error
           retention-days: 30
