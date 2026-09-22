@@ -290,6 +290,7 @@ jobs:
           }
           DART
 
+          rm -rf test
           flutter pub get
           dart format lib/main.dart
 
