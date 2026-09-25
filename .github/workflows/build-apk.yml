@@ -1,315 +1,36 @@
-name: Build SplitVideo APK
-
+name: Build APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [ main ]
     paths:
-      - ".github/workflows/build-apk.yml"
-
-permissions:
-  contents: read
-
+      - 'app/**'
+      - 'native/**'
+      - 'CMakeLists.txt'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - '.github/workflows/build-apk.yml'
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
-
-      - uses: subosito/flutter-action@v2
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install SDK components
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.0.12077973"
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
-          channel: stable
-          cache: true
-
-      - name: Create SplitVideo project
-        shell: bash
-        run: |
-          set -e
-          rm -rf splitvideo
-          flutter create --platforms=android --org com.splitvideo splitvideo
-          cd splitvideo
-
-          cat > pubspec.yaml <<'PUBSPEC'
-          name: splitvideo
-          description: Combine an image and a video side by side and export MP4.
-          publish_to: none
-          version: 1.0.0+1
-
-          environment:
-            sdk: ">=3.4.0 <4.0.0"
-
-          dependencies:
-            flutter:
-              sdk: flutter
-            image_picker: ^1.1.2
-            video_player: ^2.9.2
-            ffmpeg_kit_flutter_new: ^3.1.0
-            path_provider: ^2.1.5
-            share_plus: ^10.1.4
-            permission_handler: ^11.3.1
-
-          dev_dependencies:
-            flutter_test:
-              sdk: flutter
-            flutter_lints: ^5.0.0
-
-          flutter:
-            uses-material-design: true
-          PUBSPEC
-
-          cat > lib/main.dart <<'DART'
-          import 'dart:io';
-          import 'package:flutter/material.dart';
-          import 'package:image_picker/image_picker.dart';
-          import 'package:video_player/video_player.dart';
-          import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
-          import 'package:ffmpeg_kit_flutter_new/return_code.dart';
-          import 'package:path_provider/path_provider.dart';
-          import 'package:share_plus/share_plus.dart';
-
-          void main() => runApp(const SplitVideoApp());
-
-          class SplitVideoApp extends StatelessWidget {
-            const SplitVideoApp({super.key});
-            @override
-            Widget build(BuildContext context) {
-              return MaterialApp(
-                debugShowCheckedModeBanner: false,
-                title: 'SplitVideo',
-                theme: ThemeData(
-                  brightness: Brightness.dark,
-                  colorSchemeSeed: const Color(0xFF7C5CFF),
-                  useMaterial3: true,
-                  scaffoldBackgroundColor: const Color(0xFF090A0F),
-                  cardTheme: const CardThemeData(
-                    elevation: 0,
-                    color: Color(0xFF141620),
-                    margin: EdgeInsets.zero,
-                  ),
-                ),
-                home: const HomePage(),
-              );
-            }
-          }
-
-          class HomePage extends StatefulWidget {
-            const HomePage({super.key});
-            @override
-            State<HomePage> createState() => _HomePageState();
-          }
-
-          class _HomePageState extends State<HomePage> {
-            final picker = ImagePicker();
-            XFile? image;
-            XFile? video;
-            VideoPlayerController? controller;
-            bool imageLeft = true;
-            bool exporting = false;
-            String ratio = '16:9';
-            String? output;
-            double split = .5;
-
-            Future<void> pickImage() async {
-              final x = await picker.pickImage(source: ImageSource.gallery);
-              if (x != null) setState(() => image = x);
-            }
-
-            Future<void> pickVideo() async {
-              final x = await picker.pickVideo(source: ImageSource.gallery);
-              if (x == null) return;
-              await controller?.dispose();
-              final c = VideoPlayerController.file(File(x.path));
-              await c.initialize();
-              await c.setLooping(true);
-              await c.play();
-              setState(() { video = x; controller = c; });
-            }
-
-            (int,int) size() {
-              switch (ratio) {
-                case '9:16': return (1080,1920);
-                case '1:1': return (1080,1080);
-                default: return (1920,1080);
-              }
-            }
-
-            String q(String s) => "'${s.replaceAll("'", "'\\''")}'";
-
-            Future<void> export() async {
-              if (image == null || video == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Selecione uma imagem e um vídeo.')));
-                return;
-              }
-              setState(() { exporting = true; output = null; });
-              final (w,h) = size();
-              int lw = (w * split).round();
-              lw -= lw % 2;
-              int rw = w - lw;
-              rw -= rw % 2;
-              final dir = await getApplicationDocumentsDirectory();
-              final out = '${dir.path}/SplitVideo_${DateTime.now().millisecondsSinceEpoch}.mp4';
-
-              final firstW = imageLeft ? lw : rw;
-              final secondW = imageLeft ? rw : lw;
-              final imgFilter = "[0:v]scale=$firstW:$h:force_original_aspect_ratio=increase,crop=$firstW:$h,setsar=1[img]";
-              final vidFilter = "[1:v]scale=$secondW:$h:force_original_aspect_ratio=increase,crop=$secondW:$h,setsar=1[vid]";
-              final stack = imageLeft ? "[img][vid]hstack=inputs=2[v]" : "[vid][img]hstack=inputs=2[v]";
-              final cmd = "-loop 1 -i ${q(image!.path)} -i ${q(video!.path)} "
-                  "-filter_complex \"$imgFilter;$vidFilter;$stack\" "
-                  "-map \"[v]\" -map 1:a? -c:v libx264 -preset veryfast -crf 20 "
-                  "-c:a aac -b:a 192k -shortest -movflags +faststart -y ${q(out)}";
-
-              final session = await FFmpegKit.execute(cmd);
-              final rc = await session.getReturnCode();
-              if (!mounted) return;
-              setState(() { exporting = false; if (ReturnCode.isSuccess(rc)) output = out; });
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(ReturnCode.isSuccess(rc) ? 'MP4 criado com sucesso!' : 'Falha ao exportar o vídeo.')));
-            }
-
-            Widget slot({required bool isImage}) {
-              final has = isImage ? image != null : video != null;
-              return Expanded(
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(22),
-                  onTap: isImage ? pickImage : pickVideo,
-                  child: Container(
-                    height: 230,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF11131B),
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: const Color(0xFF292C3B)),
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: has
-                      ? (isImage
-                        ? Image.file(File(image!.path), fit: BoxFit.cover)
-                        : controller != null
-                          ? FittedBox(
-                              fit: BoxFit.cover,
-                              clipBehavior: Clip.hardEdge,
-                              child: SizedBox(
-                                width: controller!.value.size.width,
-                                height: controller!.value.size.height,
-                                child: VideoPlayer(controller!)))
-                          : const SizedBox())
-                      : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                          Icon(isImage ? Icons.add_photo_alternate_rounded : Icons.video_library_rounded, size: 42),
-                          const SizedBox(height: 12),
-                          Text(isImage ? 'Escolher imagem' : 'Escolher vídeo'),
-                        ]),
-                  ),
-                ),
-              );
-            }
-
-            @override
-            void dispose() { controller?.dispose(); super.dispose(); }
-
-            @override
-            Widget build(BuildContext context) {
-              final left = imageLeft ? slot(isImage: true) : slot(isImage: false);
-              final right = imageLeft ? slot(isImage: false) : slot(isImage: true);
-              return Scaffold(
-                appBar: AppBar(
-                  backgroundColor: Colors.transparent,
-                  title: const Text('SplitVideo', style: TextStyle(fontWeight: FontWeight.w800)),
-                  actions: [
-                    IconButton(onPressed: () => setState(() => imageLeft = !imageLeft),
-                      tooltip: 'Inverter lados', icon: const Icon(Icons.swap_horiz_rounded)),
-                  ],
-                ),
-                body: SafeArea(
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
-                    children: [
-                      const Text('Imagem + vídeo. Um MP4.',
-                        style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
-                      const SizedBox(height: 6),
-                      Text('Escolha os arquivos, ajuste o layout e exporte.',
-                        style: TextStyle(color: Colors.white.withValues(alpha: .6))),
-                      const SizedBox(height: 22),
-                      Row(children: [left, const SizedBox(width: 10), right]),
-                      const SizedBox(height: 18),
-                      Card(child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          const Text('Layout', style: TextStyle(fontWeight: FontWeight.w700)),
-                          const SizedBox(height: 12),
-                          SegmentedButton<String>(
-                            segments: const [
-                              ButtonSegment(value:'16:9', label:Text('16:9')),
-                              ButtonSegment(value:'9:16', label:Text('9:16')),
-                              ButtonSegment(value:'1:1', label:Text('1:1')),
-                            ],
-                            selected: {ratio},
-                            onSelectionChanged: (v) => setState(() => ratio = v.first),
-                          ),
-                          const SizedBox(height: 16),
-                          Text('Divisão ${(split*100).round()} / ${((1-split)*100).round()}'),
-                          Slider(value: split, min:.3, max:.7, divisions:8,
-                            onChanged:(v)=>setState(()=>split=v)),
-                          SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('Imagem à esquerda'),
-                            subtitle: const Text('Desative para colocar o vídeo à esquerda'),
-                            value: imageLeft,
-                            onChanged:(v)=>setState(()=>imageLeft=v)),
-                        ]),
-                      )),
-                      const SizedBox(height: 18),
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
-                        onPressed: exporting ? null : export,
-                        icon: exporting
-                          ? const SizedBox(width:20,height:20,child:CircularProgressIndicator(strokeWidth:2))
-                          : const Icon(Icons.movie_creation_outlined),
-                        label: Text(exporting ? 'Exportando...' : 'Exportar MP4'),
-                      ),
-                      if (output != null) ...[
-                        const SizedBox(height: 12),
-                        OutlinedButton.icon(
-                          onPressed: () => Share.shareXFiles([XFile(output!)]),
-                          icon: const Icon(Icons.share_rounded),
-                          label: const Text('Compartilhar MP4'),
-                        ),
-                      ]
-                    ],
-                  ),
-                ),
-              );
-            }
-          }
-          DART
-
-          rm -rf test
-          flutter pub get
-          dart format lib/main.dart
-
-      - name: Analyze
-        working-directory: splitvideo
-        run: flutter analyze --no-fatal-infos
-
-      - name: Build APK
-        working-directory: splitvideo
-        run: flutter build apk --release
-
-      - name: Package APK
-        run: |
-          mkdir -p dist
-          cp splitvideo/build/app/outputs/flutter-apk/app-release.apk dist/SplitVideo-release.apk
-
-      - uses: actions/upload-artifact@v4
+          gradle-version: '8.9'
+      - name: Build debug APK
+        run: gradle assembleDebug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: SplitVideo-APK
-          path: dist/SplitVideo-release.apk
-          if-no-files-found: error
-          retention-days: 30
+          name: ps2-devkit-sim-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
