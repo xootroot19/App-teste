@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(ps2_devkit_sim)
+add_library(ps2devkit SHARED native/ps2_devkit.cpp)
+find_library(log-lib log)
+target_link_libraries(ps2devkit ${log-lib})
+target_compile_features(ps2devkit PRIVATE cxx_std_20)
